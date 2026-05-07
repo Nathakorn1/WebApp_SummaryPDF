@@ -1,9 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
-import pdfParse from 'pdf-parse';
-import OpenAI from 'openai';
+import { GoogleGenerativeAI } from '@google/generative-ai';
 import { getAuth } from '@clerk/nextjs/server';
 
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY!);
 
 export async function POST(req: NextRequest) {
   const { userId } = getAuth(req);
@@ -21,23 +20,25 @@ export async function POST(req: NextRequest) {
 
     const arrayBuffer = await file.arrayBuffer();
     const buffer = Buffer.from(arrayBuffer);
-    const pdfData = await pdfParse(buffer);
     
-    // Grabbing the first 6000 characters to stay within AI limits
-    const extractedText = pdfData.text.substring(0, 6000); 
+    const text = buffer.toString('latin1');
+    const matches = text.match(/BT[\s\S]*?ET/g) || [];
+    const extractedText = matches
+      .join(' ')
+      .replace(/[^\x20-\x7E]/g, ' ')
+      .replace(/\s+/g, ' ')
+      .substring(0, 6000);
 
-    const response = await openai.chat.completions.create({
-      model: "gpt-3.5-turbo",
-      messages: [
-        { role: "system", content: "Summarize this PDF into 3-5 bullet points." },
-        { role: "user", content: extractedText }
-      ],
-    });
+    const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
+    const result = await model.generateContent(
+      `Summarize this PDF content into 3-5 bullet points:\n\n${extractedText || "No text could be extracted."}`
+    );
 
-    return NextResponse.json({ summary: response.choices[0].message.content });
+    const summary = result.response.text();
+    return NextResponse.json({ summary });
 
   } catch (error) {
-    console.error("Backend Error:", error);
+    console.error("Backend Error:", JSON.stringify(error, null, 2));
     return NextResponse.json({ error: "Failed to process PDF" }, { status: 500 });
   }
 }
